@@ -36,7 +36,7 @@ services = db.sql_to_df(
 
 # JOBS DURATIONS TABLE
 
-times_path = 'jobs_time.csv'
+times_path = os.path.join(query_path, 'jobs_time.csv')
 times = pd.read_csv(times_path)
 
 
@@ -53,7 +53,7 @@ def get_services(row:str)->str:
     """    
     return ','.join([services.get(int(item),'NA') for item in row])
 
-def clean_row(row:dict, bulk_format=False)->dict:
+def clean_row(row:dict, bulk_format:bool=False, test:bool=False)->dict:
     """_summary_
 
     Args:
@@ -67,7 +67,8 @@ def clean_row(row:dict, bulk_format=False)->dict:
     order_dict['notes'] = f"""{row['job_type']} - {row['price']} - {row['services']} -"""
     del order_dict['price'], order_dict['services'], order_dict['job_type']
     order_dict['location'] = {
-        'address': f"{order_dict['location_address']} {order_dict['location_postcode_address']}"
+        'notes': "TEST0",
+        'address': f"{order_dict['location_postcode_address']}", # {order_dict['location_address']} 
         }
     del order_dict['location_postcode_address'], order_dict['location_address']
     if not bulk_format:
@@ -86,10 +87,12 @@ def clean_row(row:dict, bulk_format=False)->dict:
     del order_dict['locksmith_email']
     order_dict['duration'] = get_job_duration(order_dict['SpareKey'], order_dict['LocksmithSuppliedServicesIds'])
     del order_dict['SpareKey'], order_dict["LocksmithSuppliedServicesIds"]
-    # FOR TESTING
-    order_dict['orderNo'] = 'TESTING_' + order_dict['orderNo']
-    # REAL
-    # order_dict['orderNo'] = order_dict['orderNo']
+    if test:
+        # FOR TESTING
+        order_dict['orderNo'] = 'TESTING_' + order_dict['orderNo']
+    else:
+        # REAL
+        order_dict['orderNo'] = order_dict['orderNo']
     return order_dict
 
 def get_job_duration(SpareKey:bool, LocksmithSuppliedServicesIds:list)->int:
@@ -184,14 +187,19 @@ def post_job_2_optimo(order:dict)->dict:
                 result['success'] = True
             else:
                 result.update(re)
+                result["address"] = order["location"]["address"]
                 # result.update(order)
     else:
         result.update(re)
+        result["address"] = order["location"]["address"]
         # result.update(order)
     return result
 
-def main()->dict:
+def main(test:bool=False)->dict:
     """_summary_
+
+    Args:
+        test (bool): _description_. Defaults to True.
 
     Returns:
         dict: Dictionary with the result after the execution.
@@ -201,25 +209,29 @@ def main()->dict:
             'success': Dataframe with all the jobs that are in the system
             'fail': Dataframe with the jobs that could not be posted on optimo
         }
-    """    
+    """      
     fail_df = None
     success_df = None
     planning_status = None
     message = None
     df = db.sql_to_df(query_jobs, use_live=True)
     if not df.empty:
+        df.fillna('', inplace=True)
         date, df = clean_df_tomorrow_jobs(df)
         print(date)
-        df.fillna('', inplace=True)
         results = []
-        for order in [clean_row(row) for _, row in df.iterrows()][:]:
+        for order in [clean_row(row, test=test) for _, row in df.iterrows()][:]:
             results.append(post_job_2_optimo(order))
         results = pd.DataFrame(results).sort_values('success', ascending=True)
         fail_df = results[~results['success']].drop(columns=['optimoId'])
-        already_done = fail_df[fail_df['code'] == 'ERR_ORD_EXISTS'][['orderNo', 'success']]
+        already_done = fail_df[fail_df['code'] == 'ERR_ORD_EXISTS']
+        if not already_done.empty:
+            already_done = already_done[['orderNo', 'success']]
+        else:
+            already_done = pd.DataFrame(columns=['orderNo', 'success'])
         already_done['optimoId'] = 'already_system'
-        fail_df = fail_df[fail_df['code'] != 'ERR_ORD_EXISTS']
-        success_df = results[results['success']][['orderNo', 'optimoId', 'success']]
+        fail_df = fail_df[fail_df['code'] != 'ERR_ORD_EXISTS'][['orderNo', 'success', 'code', 'message']]
+        success_df = results[results['success']][['orderNo', 'success', 'optimoId']]
         success_df = pd.concat([success_df, already_done])
 
         # PLANNING // ASSINGNED TO DRIVER 
@@ -228,7 +240,7 @@ def main()->dict:
                 re = re.json()
                 planning_status =re['success']
                 if not re['success']:
-                    message = f"Error while planning: {re['code']}, {re['message']}"
+                    message = f"Error while planning: {re['code']}"
                 else:
                     message = 'Planning done'
         else:
@@ -245,9 +257,24 @@ def main()->dict:
         }
 
 if __name__ == '__main__':
-    result = main()
-    for key, val in result.items():
-        print(f'{key}:\n\t{val},')
+    result = main(test=True)
+
+    if not result['success'].empty:
+        success_df_str = result['success'].to_string(index=False)
+    else:
+        success_df_str = ''
+
+    if not result['fail'].empty:
+        fail_df_str = result['fail'].to_string(index=False)
+    else:
+        fail_df_str = ''
+
+    print(f"""RESULT: {result['message']}
+Planning success: {result['plannig']}
+\nFail Jobs: {result['fail'].shape[0]}
+{fail_df_str}
+\nSuccess Jobs: {result['success'].shape[0]}
+{success_df_str}""")
 
     # ############################# BULK ENDPOINT NEEDS COORDINATES !!!! #################################
     # # data = {

@@ -19,27 +19,36 @@ from . import optimo_post_jobs
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Python HTTP trigger function processed a request.')
 
-    try:
-        message, planning_status, success_df, fail_df = optimo_post_jobs.main()
+    test = req.params.get('test')
+    if not test:
+        try:
+            req_body = req.get_json()
+        except ValueError:
+            pass
+        else:
+            test = req_body.get('test')
 
-        if not success_df.empty:
-            success_df_str = success_df.to_string(index=False)
+    try:
+        result = optimo_post_jobs.main(test=test)
+
+        if not result['success'].empty:
+            success_df_str = result['success'].to_string(index=False)
         else:
             success_df_str = ''
 
-        if not fail_df.empty:
-            fail_df_str = fail_df.to_string(index=False)
+        if not result['fail'].empty:
+            fail_df_str = result['fail'].to_string(index=False)
         else:
             fail_df_str = ''
 
         return  func.HttpResponse(
-f"""RESULT: {message}
-Planning success: {planning_status}
-\nFail Jobs: {success_df.shape[0]}
+    f"""RESULT: {result['message']}
+Planning success: {result['plannig']}
+\n\n\n\n\nFail Jobs: {result['fail'].shape[0]}
 {fail_df_str}
-\nSuccess Jobs: {fail_df.shape[0]}
-{fail_df_str}""",
-        status_code=200)
+\n\n\n\n\nSuccess Jobs: {result['success'].shape[0]}
+{success_df_str}""",
+            status_code=200)
     except Exception as e:
         logging.exception(e)
         return func.HttpResponse(
